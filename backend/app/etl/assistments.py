@@ -36,10 +36,11 @@ import hashlib
 import json
 import logging
 import re
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -175,7 +176,8 @@ def _detect_encoding(path: Path, sample_size: int = 1 << 20) -> str:
     """Return a safe text encoding for the CSV.
 
     The official 2009-10 file contains a few non-UTF-8 bytes (mostly in free-text
-    answer fields), so fall back to Latin-1 rather than failing the whole import.
+    answer fields), sometimes after the first megabyte, so this is only a first
+    guess; ``_iter_decoded_lines`` handles stray bytes line by line.
     """
     with path.open("rb") as handle:
         sample = handle.read(sample_size)
@@ -187,6 +189,21 @@ def _detect_encoding(path: Path, sample_size: int = 1 << 20) -> str:
     except UnicodeDecodeError:
         return "latin-1"
     return "utf-8-sig"
+
+
+def _iter_decoded_lines(path: Path, encoding: str) -> Iterator[str]:
+    """Yield lines decoded with ``encoding``, falling back to Latin-1 per line.
+
+    ASSISTments files are mostly UTF-8 with a handful of Latin-1 bytes in
+    free-text fields. Decoding each line separately keeps valid UTF-8 intact
+    instead of forced-decoding the whole file or replacing every field.
+    """
+    with path.open("rb") as handle:
+        for line in handle:
+            try:
+                yield line.decode(encoding)
+            except UnicodeDecodeError:
+                yield line.decode("latin-1")
 
 
 def _detect_columns(fieldnames: list[str]) -> dict[str, str | None]:
@@ -472,8 +489,9 @@ def import_assistments(
     text_encoding = encoding or _detect_encoding(path)
     logger.info("Reading %s with encoding %s", path, text_encoding)
 
-    with path.open(newline="", encoding=text_encoding) as handle:
-        reader = csv.DictReader(handle, delimiter=delimiter)
+    lines = _iter_decoded_lines(path, text_encoding)
+    with closing(lines):
+        reader = csv.DictReader(lines, delimiter=delimiter)
         if not reader.fieldnames:
             raise ValueError(f"CSV has no header row: {path}")
         columns = _detect_columns(reader.fieldnames)

@@ -138,6 +138,25 @@ def test_assistments_etl_handles_non_utf8_files(db, tmp_path):
     assert topic is not None
 
 
+def test_assistments_etl_decodes_mixed_encoding_lines(db, tmp_path):
+    """Valid UTF-8 lines survive even when a later line is Latin-1."""
+    csv_path = tmp_path / "mixed.csv"
+    header = (
+        "order_id,assignment_id,user_id,skill_id,skill_name,correct,ms_first_response\n"
+    )
+    csv_path.write_bytes(
+        header.encode("utf-8")
+        + "1,9001,1001,21,\u00dcber Geometry,1,4000\n".encode("utf-8")
+        + "2,9002,1001,34,Caf\xe9 Algebra,1,4000\n".encode("latin-1")
+    )
+
+    summary = import_assistments(db, csv_path, encoding="utf-8-sig", build_attempts=False)
+
+    assert summary.inserted_responses == 2
+    assert db.scalar(select(Topic).where(Topic.name == "\u00dcber Geometry")) is not None
+    assert db.scalar(select(Topic).where(Topic.name == "Caf\xe9 Algebra")) is not None
+
+
 def test_assistments_etl_keeps_multi_skill_rows_sharing_an_order_id(db, tmp_path):
     """Multi-skill problems appear once per skill with the same order_id."""
     csv_path = tmp_path / "multi_skill.csv"
