@@ -118,6 +118,13 @@ The dataset is published by ASSISTments at
 file in `backend/data/` — for example `backend/data/skill_builder_data.csv`. Real
 dataset files are gitignored; only `backend/data/sample_assistments.csv` is committed.
 
+The original release contains roughly 525k response rows, 4.2k students, 3.5k
+assignments and 111 skill labels. About 79k rows have an empty `skill_name` (they belong
+to non-skill-builder problem sets) and are skipped as invalid. The file has **no
+timestamp column**; `order_id` is chronological and is used to build a synthetic
+timeline. It also contains a few non-UTF-8 bytes, so the importer auto-detects UTF-8
+and falls back to Latin-1.
+
 ### Run the import
 
 ```bash
@@ -148,7 +155,8 @@ summary:
   "students_created": 3,
   "topics_created": 3,
   "attempts_created": 5,
-  "mastery_updates": 5
+  "mastery_updates": 5,
+  "synthetic_timestamps": 0
 }
 ```
 
@@ -160,22 +168,25 @@ summary:
 | `--max-skills N` | Create at most N skill topics |
 | `--batch-size N` | Insert batch size; default `500` |
 | `--delimiter CHAR` | CSV delimiter; default `,` |
+| `--encoding NAME` | Override encoding; default auto-detect (UTF-8, then Latin-1) |
 | `--skip-attempts` | Store raw responses only; skip attempt/mastery building |
 
 ### What the pipeline does
 
 1. **Extract / validate** — detects the official headers (and common re-exports),
-   requires `user_id`, `correct`, and a timestamp, and accepts either `skill_name` or
-   `skill_id`. Rows with unparseable correctness, timestamps, or a missing user or
-   skill are counted as invalid and skipped.
+   requires `user_id`, `correct`, and either `skill_name` or `skill_id`. Rows with
+   unparseable correctness, a missing user or skill, or an unreadable timestamp *when
+   the file provides one* are counted as invalid and skipped.
 2. **Transform** — external users become anonymised students
    (`assistments+<user_id>@edumind.local`), skills become topics, and each valid row
    becomes a `problem_responses` record.
 3. **Deduplicate** — each row gets a SHA-256 identity over dataset, user, skill,
-   assignment, timestamp, and correctness. Re-importing the same file inserts nothing.
+   assignment, order ID, timestamp, and correctness. Re-importing the same file inserts
+   nothing. Multi-skill problems appear once per skill with the same `order_id`; the
+   skill is part of the identity, so both rows are kept.
 4. **Build attempts** — responses are grouped per student, topic, and calendar day into
-   quiz attempts. Mastery snapshots are timestamped at the original attempt time, so
-   history stays chronological instead of appearing as today.
+   quiz attempts. Mastery snapshots use the original attempt time (or the synthetic
+   one), so history stays chronological instead of appearing as today.
 5. **Estimate difficulty** — topics created by the import get
    `difficulty = 1 - accuracy` (clamped to `0.05..0.95`). Curated topics keep their
    hand-set difficulty.
@@ -189,10 +200,18 @@ imported students get `/mastery`, `/mastery-history`, `/progress`, and
 - Importing into a database that already has demo data simply adds the imported
   students and topics alongside it. To show **only** imported data, start from an empty
   database and set `SEED_DEMO_DATA=false`.
+- **Synthetic dates:** because the official file has no timestamps, imported history is
+  placed on a deterministic 2010 timeline. Each new assignment advances one day, and
+  responses inside an assignment advance by their recorded response time. The dates are
+  internally consistent and reproducible, but they are not real calendar dates.
+- A full import creates ~4.2k students and 111 topics, all returned by
+  `GET /api/students` and `/api/topics`. Use `--max-rows` / `--max-skills` for a
+  dashboard-sized demo until the student picker is paginated or searchable.
 - Re-running with different flags (for example a different `--dataset-name`) creates a
   separate set of response rows, because the dataset label is part of the identity.
 - The import is idempotent for the same file and label, but it is not a
-  change-data-capture sync: corrected rows with new timestamps count as new responses.
+  change-data-capture sync: corrected rows with new timestamps or order IDs count as
+  new responses.
 - The importer uses the standard library `csv` module and SQLAlchemy, so it runs without
   pandas or numpy.
 

@@ -1,11 +1,18 @@
 """ASSISTments 2009-10 Skill Builder ETL.
 
 Pipeline:
-1. Extract rows from the Skill Builder CSV.
-2. Validate external user, skill, correctness and timestamp fields.
+1. Extract rows from the Skill Builder CSV (auto-detects UTF-8 vs Latin-1).
+2. Validate external user, skill and correctness fields; timestamps are used
+   when present.
 3. Transform external IDs into EduMind students, topics and canonical records.
 4. Load deduplicated ``problem_responses`` rows.
 5. Aggregate responses into daily quiz attempts and update mastery history.
+
+The official 2009-10 file has **no timestamp column** — only ``order_id``
+(chronological) and response durations. For such files the importer builds a
+deterministic pseudo-timeline: each new assignment for a student advances one
+day, and responses inside an assignment advance by their response time. Dates
+are therefore synthetic and should not be read as real calendar history.
 
 The importer streams the file in batches, so it can handle the full dataset
 without loading the whole CSV into memory.
@@ -18,7 +25,7 @@ Typical usage::
         --max-skills 20
 
 Re-running the same file is safe: rows are deduplicated by a stable hash of
-dataset, user, skill, assignment, timestamp and correctness.
+dataset, user, skill, assignment, order ID, timestamp and correctness.
 """
 
 from __future__ import annotations
@@ -30,7 +37,7 @@ import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +91,7 @@ class ImportSummary:
     topics_created: int = 0
     attempts_created: int = 0
     mastery_updates: int = 0
+    synthetic_timestamps: int = 0
     invalid_examples: list[str] = field(default_factory=list)
 
 
@@ -95,6 +103,65 @@ class _AttemptGroup:
     response_ids: list[int] = field(default_factory=list)
 
 
+# Anchor for files without timestamps. 2010-01-04 is a Monday inside the
+# 2009-10 school year, so synthetic history reads plausibly on charts.
+_SYNTHETIC_BASE = datetime(2010, 1, 4, 9, 0, tzinfo=timezone.utc)
+_SYNTHETIC_DAY = timedelta(days=1)
+_MAX_RESPONSE_MS = 10 * 60 * 1000
+_MAX_OFFSET_MS = 6 * 60 * 60 * 1000
+_FALLBACK_PER_DAY = 20
+
+
+class _SyntheticClock:
+    """Deterministic pseudo-timeline for CSVs without absolute timestamps.
+
+    ``order_id`` in the ASSISTments files is chronological, so rows arrive in
+    the order the student worked. Each change of ``assignment_id`` advances the
+    clock one day and responses inside an assignment advance by their measured
+    response time. This keeps daily attempt grouping meaningful while making
+    the timestamp difference between two imports of the same file zero.
+    """
+
+    def __init__(self, base: datetime = _SYNTHETIC_BASE) -> None:
+        self._base = base
+        self._state: dict[str, tuple[str, datetime, int]] = {}
+        self._counts: dict[str, int] = {}
+
+    def next_timestamp(
+        self,
+        user_id: str,
+        assignment_id: str,
+        response_ms: int | None,
+    ) -> datetime:
+        duration = response_ms if response_ms and response_ms > 0 else 60_000
+        duration = min(duration, _MAX_RESPONSE_MS)
+
+        if not assignment_id:
+            # Nothing identifies a sitting: use 20 responses per synthetic day.
+            count = self._counts.get(user_id, 0)
+            self._counts[user_id] = count + 1
+            day = count // _FALLBACK_PER_DAY
+            offset = (count % _FALLBACK_PER_DAY) * duration
+            timestamp = self._base + timedelta(days=day, milliseconds=offset)
+            self._state[user_id] = ("", self._base + timedelta(days=day), offset + duration)
+            return timestamp
+
+        state = self._state.get(user_id)
+        if state is None:
+            start, offset = self._base, 0
+        else:
+            previous_assignment, previous_start, previous_offset = state
+            if previous_assignment and assignment_id != previous_assignment:
+                start, offset = previous_start + _SYNTHETIC_DAY, 0
+            else:
+                start, offset = previous_start, previous_offset
+
+        offset = min(offset, _MAX_OFFSET_MS)
+        timestamp = start + timedelta(milliseconds=offset)
+        self._state[user_id] = (assignment_id, start, offset + duration)
+        return timestamp
+
+
 def _normalise_header(name: str) -> str:
     cleaned = name.replace("\ufeff", "").strip().lower()
     return re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")
@@ -102,6 +169,24 @@ def _normalise_header(name: str) -> str:
 
 def _clean(value: Any) -> str:
     return str(value).strip() if value is not None else ""
+
+
+def _detect_encoding(path: Path, sample_size: int = 1 << 20) -> str:
+    """Return a safe text encoding for the CSV.
+
+    The official 2009-10 file contains a few non-UTF-8 bytes (mostly in free-text
+    answer fields), so fall back to Latin-1 rather than failing the whole import.
+    """
+    with path.open("rb") as handle:
+        sample = handle.read(sample_size)
+    cut = sample.rfind(b"\n")
+    if cut != -1:
+        sample = sample[:cut]
+    try:
+        sample.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return "latin-1"
+    return "utf-8-sig"
 
 
 def _detect_columns(fieldnames: list[str]) -> dict[str, str | None]:
@@ -131,7 +216,6 @@ def _detect_columns(fieldnames: list[str]) -> dict[str, str | None]:
         for key, label in (
             ("user", "user_id"),
             ("correct", "correct"),
-            ("start_time", "start_time"),
         )
         if not columns[key]
     ]
@@ -222,7 +306,9 @@ def _parse_row(
     responded_at = _parse_timestamp(
         _clean(raw.get(columns["start_time"])) if columns["start_time"] else ""
     )
-    if responded_at is None:
+    # A timestamp column is optional (the official file has none). If the file
+    # does provide one, an unparseable value makes the row invalid.
+    if columns["start_time"] and responded_at is None:
         return None
 
     skill_name = (
@@ -238,15 +324,16 @@ def _parse_row(
     order_id = _clean(raw.get(columns["order"])) if columns["order"] else ""
 
     topic_key = (skill_name or f"Skill {skill_id}").casefold()
-    # `order_id` is deliberately excluded: re-exports renumber it, and the
-    # remaining fields already identify a response uniquely in practice, so
-    # repeated rows are still deduplicated across imports.
+    # `order_id` is the original problem-log id: it is stable across downloads
+    # and distinguishes multiple responses inside one assignment, which the
+    # remaining fields cannot do when the file has no timestamps.
     digest_parts = (
         dataset,
         user_id,
         topic_key,
         assignment_id,
-        responded_at.isoformat(),
+        order_id,
+        responded_at.isoformat() if responded_at else "",
         "1" if correct else "0",
     )
     digest = hashlib.sha256("\x1f".join(digest_parts).encode("utf-8")).hexdigest()
@@ -349,6 +436,7 @@ def import_assistments(
     max_skills: int | None = None,
     batch_size: int = 500,
     delimiter: str = ",",
+    encoding: str | None = None,
     build_attempts: bool = True,
     progress_every: int = 25_000,
 ) -> ImportSummary:
@@ -357,6 +445,10 @@ def import_assistments(
     ``max_skills`` limits how many distinct skills become topics; rows for
     additional skills are skipped and counted. This is useful for keeping a
     local demo dashboard readable when using the full dataset.
+
+    If the file has no timestamp column (as with the official 2009-10 Skill
+    Builder release), a deterministic synthetic timeline is generated; see
+    ``_SyntheticClock``.
     """
     path = Path(csv_path)
     if not path.exists():
@@ -375,8 +467,12 @@ def import_assistments(
     allowed_skills: set[str] = set()
     groups: dict[tuple[int, int, date], _AttemptGroup] = {}
     batch: list[dict[str, Any]] = []
+    clock = _SyntheticClock()
 
-    with path.open(newline="", encoding="utf-8-sig") as handle:
+    text_encoding = encoding or _detect_encoding(path)
+    logger.info("Reading %s with encoding %s", path, text_encoding)
+
+    with path.open(newline="", encoding=text_encoding) as handle:
         reader = csv.DictReader(handle, delimiter=delimiter)
         if not reader.fieldnames:
             raise ValueError(f"CSV has no header row: {path}")
@@ -469,9 +565,9 @@ def import_assistments(
             summary.inserted_responses += len(new_rows)
 
         for line_number, raw in enumerate(reader, start=2):
-            summary.rows_read += 1
-            if max_rows is not None and summary.rows_read > max_rows:
+            if max_rows is not None and summary.rows_read >= max_rows:
                 break
+            summary.rows_read += 1
 
             item = _parse_row(raw, columns, dataset_name)
             if item is None:
@@ -479,6 +575,14 @@ def import_assistments(
                 if len(summary.invalid_examples) < 5:
                     summary.invalid_examples.append(f"line {line_number}")
                 continue
+
+            if item["responded_at"] is None:
+                item["responded_at"] = clock.next_timestamp(
+                    item["external_user_id"],
+                    item["assignment_id"],
+                    item["response_ms"],
+                )
+                summary.synthetic_timestamps += 1
 
             batch.append(item)
             if len(batch) >= batch_size:
@@ -578,6 +682,11 @@ def main(argv: list[str] | None = None) -> int:
         help="CSV delimiter (default: comma)",
     )
     parser.add_argument(
+        "--encoding",
+        default=None,
+        help="CSV encoding (default: auto-detect UTF-8, fall back to Latin-1)",
+    )
+    parser.add_argument(
         "--skip-attempts",
         action="store_true",
         help="Load raw responses only; do not build attempts or mastery",
@@ -597,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_skills=args.max_skills,
                 batch_size=args.batch_size,
                 delimiter=args.delimiter,
+                encoding=args.encoding,
                 build_attempts=not args.skip_attempts,
             )
         except Exception as exc:  # noqa: BLE001 - CLI should surface a clean error

@@ -85,7 +85,71 @@ def test_assistments_etl_can_skip_attempt_building(db):
 
 def test_assistments_etl_reports_missing_columns(db, tmp_path):
     bad_csv = tmp_path / "bad.csv"
-    bad_csv.write_text("user_id,skill_id,correct\n1001,21,1\n", encoding="utf-8")
+    bad_csv.write_text("user_id,skill_id\n1001,21\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="start_time"):
+    with pytest.raises(ValueError, match="correct"):
         import_assistments(db, bad_csv)
+
+
+def test_assistments_etl_synthesises_time_when_column_is_absent(db, tmp_path):
+    """The official 2009-10 Skill Builder file has no timestamp column."""
+    csv_path = tmp_path / "no_time.csv"
+    rows = [
+        "order_id,assignment_id,user_id,skill_id,skill_name,correct,ms_first_response",
+        "1,9001,1001,21,Linear Equations,1,4000",
+        "2,9001,1001,21,Linear Equations,1,5000",
+        "3,9001,1001,21,Linear Equations,0,7000",
+        "4,9002,1001,21,Linear Equations,1,3000",
+    ]
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    summary = import_assistments(db, csv_path)
+
+    assert summary.inserted_responses == 4
+    assert summary.synthetic_timestamps == 4
+    assert summary.attempts_created == 2
+
+    responses = db.scalars(
+        select(ProblemResponse).order_by(ProblemResponse.id)
+    ).all()
+    assert all(response.responded_at.year == 2010 for response in responses)
+    assert responses == sorted(responses, key=lambda response: response.responded_at)
+
+    snapshots = db.scalars(
+        select(MasterySnapshot).order_by(MasterySnapshot.created_at)
+    ).all()
+    assert len(snapshots) == 2
+    assert snapshots[0].created_at < snapshots[1].created_at
+
+
+def test_assistments_etl_handles_non_utf8_files(db, tmp_path):
+    csv_path = tmp_path / "latin1.csv"
+    csv_path.write_bytes(
+        (
+            "order_id,assignment_id,user_id,skill_id,skill_name,correct,ms_first_response\n"
+            "1,9001,1001,21,Caf\xe9 Algebra,1,4000\n"
+        ).encode("latin-1")
+    )
+
+    summary = import_assistments(db, csv_path)
+
+    assert summary.inserted_responses == 1
+    topic = db.scalar(select(Topic).where(Topic.name == "Caf\xe9 Algebra"))
+    assert topic is not None
+
+
+def test_assistments_etl_keeps_multi_skill_rows_sharing_an_order_id(db, tmp_path):
+    """Multi-skill problems appear once per skill with the same order_id."""
+    csv_path = tmp_path / "multi_skill.csv"
+    rows = [
+        "order_id,assignment_id,user_id,skill_id,skill_name,correct,ms_first_response",
+        "1,9001,1001,21,Linear Equations,1,4000",
+        "1,9001,1001,34,Box and Whisker,1,4000",
+    ]
+    csv_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    summary = import_assistments(db, csv_path, build_attempts=False)
+
+    assert summary.inserted_responses == 2
+    assert summary.topics_created == 2
+    assert db.scalar(select(func.count(ProblemResponse.id))) == 2
