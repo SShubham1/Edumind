@@ -265,7 +265,10 @@ export default function App() {
                     <header className="card-head">
                       <div>
                         <h2 id="trend-title">Mastery over time</h2>
-                        <p className="hint">Every quiz attempt adds a mastery snapshot.</p>
+                        <p className="hint">
+                          One average across the topics attempted so far, built from recorded
+                          mastery snapshots.
+                        </p>
                       </div>
                     </header>
                     <MasteryTrend
