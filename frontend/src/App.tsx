@@ -328,7 +328,10 @@ export default function App() {
                   <section aria-labelledby="log-title">
                     <div className="section-head">
                       <h2 id="log-title">Log learning activity</h2>
-                      <p className="hint">New records update mastery and recommendations.</p>
+                      <p className="hint">
+                        Log revision time or an external quiz result. The AI practice
+                        quiz above records itself.
+                      </p>
                     </div>
                     <EntryForms
                       key={`${selectedStudent.id}-${subjectKey ?? "all"}`}

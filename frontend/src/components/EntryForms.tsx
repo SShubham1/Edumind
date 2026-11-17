@@ -180,8 +180,11 @@ function QuizForm({ studentId, topics, onSaved }: FormProps) {
 
   return (
     <form className="card form-card" onSubmit={handleSubmit} aria-labelledby="quiz-form-title">
-      <h3 id="quiz-form-title">Record a quiz result</h3>
-      <p className="hint">Each attempt updates the mastery estimate and rankings.</p>
+      <h3 id="quiz-form-title">Log a quiz taken elsewhere</h3>
+      <p className="hint">
+        For a paper test or an external quiz. AI practice quizzes record their own
+        results automatically when graded.
+      </p>
 
       <label htmlFor="quiz-topic">Topic</label>
       <select
@@ -231,7 +234,7 @@ function QuizForm({ studentId, topics, onSaved }: FormProps) {
       </p>
 
       <button type="submit" className="button" disabled={saving || topics.length === 0}>
-        {saving ? "Saving…" : "Save quiz result"}
+        {saving ? "Saving…" : "Save external quiz"}
       </button>
 
       <div aria-live="polite">
