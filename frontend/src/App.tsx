@@ -241,6 +241,7 @@ export default function App() {
                           <h2 id="mastery-title">Mastery by topic</h2>
                           <p className="hint">
                             Estimated with a simplified Bayesian Knowledge Tracing update.
+                            The chart shows your weakest attempted topics; the table lists all.
                           </p>
                         </div>
                       </header>

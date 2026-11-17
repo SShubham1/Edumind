@@ -587,7 +587,8 @@ main {
 
 .table-wrap {
   margin-top: 10px;
-  overflow-x: auto;
+  max-height: 420px;
+  overflow: auto;
   border: 1px solid var(--line);
   border-radius: 10px;
 }
@@ -614,6 +615,9 @@ td {
 }
 
 thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   background: var(--surface-muted);
   font-size: 0.74rem;
   text-transform: uppercase;
