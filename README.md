@@ -12,6 +12,8 @@ contract is agreed.
 ## Features
 
 - **Students and topics** with seeded demo data.
+- **ASSISTments ETL** that imports real historical responses from the 2009-10 Skill
+  Builder CSV, stores them in `problem_responses`, and rebuilds attempts and mastery.
 - **Study logging** and **quiz results** that update mastery.
 - **Simplified Bayesian Knowledge Tracing** for per-topic mastery estimates.
 - **Explainable recommendations** using
@@ -46,8 +48,11 @@ Edumind/
 │   │   ├── seed.py              # demo data
 │   │   ├── main.py              # FastAPI app and lifespan
 │   │   ├── routers/             # health, topics, students, records, flashcards
+│   │   ├── etl/                 # ASSISTments CSV importer and CLI
 │   │   └── services/            # mastery, progress, recommendations, llm
-│   ├── tests/                   # pytest service and API tests
+│   ├── data/
+│   │   └── sample_assistments.csv   # tiny committed fixture for the ETL
+│   ├── tests/                   # pytest service, API and ETL tests
 │   └── requirements.txt
 ├── frontend/
 │   ├── src/
@@ -98,6 +103,98 @@ Open <http://localhost:5173>. Vite proxies `/api` to `http://localhost:8000`.
 
 Five topics are seeded: Arrays and Lists, Binary Trees, Graphs, Dynamic Programming,
 Probability.
+
+## ASSISTments dataset (ETL)
+
+The importer streams the **ASSISTments 2009-10 Skill Builder** CSV into EduMind. It
+does not bundle the dataset; download it yourself and convert it to CSV if needed.
+
+### Get the data
+
+The dataset is published by ASSISTments at
+<https://sites.google.com/site/assistmentsdata/home/2009-2010-assistment-data>
+(`skill_builder_data.csv`, plus the newer
+`skill_builder_data_corrected/skill_builder_data_corrected.csv` re-release). Place the
+file in `backend/data/` — for example `backend/data/skill_builder_data.csv`. Real
+dataset files are gitignored; only `backend/data/sample_assistments.csv` is committed.
+
+### Run the import
+
+```bash
+cd backend
+.venv/bin/python -m app.etl.assistments --csv data/skill_builder_data.csv
+```
+
+For a quick trial that keeps the dashboard readable:
+
+```bash
+# First 50k rows only
+.venv/bin/python -m app.etl.assistments --csv data/skill_builder_data.csv --max-rows 50000
+
+# Only the first 10 skills become topics; responses for later skills are skipped
+.venv/bin/python -m app.etl.assistments --csv data/skill_builder_data.csv --max-skills 10
+```
+
+The CLI creates the tables if they do not exist, commits in batches, and prints a JSON
+summary:
+
+```json
+{
+  "rows_read": 17,
+  "inserted_responses": 13,
+  "duplicate_rows": 1,
+  "invalid_rows": 3,
+  "skipped_new_skill_rows": 0,
+  "students_created": 3,
+  "topics_created": 3,
+  "attempts_created": 5,
+  "mastery_updates": 5
+}
+```
+
+| Flag | Purpose |
+|---|---|
+| `--csv PATH` | Required input CSV |
+| `--dataset-name NAME` | Label stored on responses; default `assistments-2009-10` |
+| `--max-rows N` | Read only the first N data rows |
+| `--max-skills N` | Create at most N skill topics |
+| `--batch-size N` | Insert batch size; default `500` |
+| `--delimiter CHAR` | CSV delimiter; default `,` |
+| `--skip-attempts` | Store raw responses only; skip attempt/mastery building |
+
+### What the pipeline does
+
+1. **Extract / validate** — detects the official headers (and common re-exports),
+   requires `user_id`, `correct`, and a timestamp, and accepts either `skill_name` or
+   `skill_id`. Rows with unparseable correctness, timestamps, or a missing user or
+   skill are counted as invalid and skipped.
+2. **Transform** — external users become anonymised students
+   (`assistments+<user_id>@edumind.local`), skills become topics, and each valid row
+   becomes a `problem_responses` record.
+3. **Deduplicate** — each row gets a SHA-256 identity over dataset, user, skill,
+   assignment, timestamp, and correctness. Re-importing the same file inserts nothing.
+4. **Build attempts** — responses are grouped per student, topic, and calendar day into
+   quiz attempts. Mastery snapshots are timestamped at the original attempt time, so
+   history stays chronological instead of appearing as today.
+5. **Estimate difficulty** — topics created by the import get
+   `difficulty = 1 - accuracy` (clamped to `0.05..0.95`). Curated topics keep their
+   hand-set difficulty.
+
+The frontend and API then work unchanged: imported topics appear in `/api/topics`, and
+imported students get `/mastery`, `/mastery-history`, `/progress`, and
+`/recommendations` from real responses.
+
+### Notes
+
+- Importing into a database that already has demo data simply adds the imported
+  students and topics alongside it. To show **only** imported data, start from an empty
+  database and set `SEED_DEMO_DATA=false`.
+- Re-running with different flags (for example a different `--dataset-name`) creates a
+  separate set of response rows, because the dataset label is part of the identity.
+- The import is idempotent for the same file and label, but it is not a
+  change-data-capture sync: corrected rows with new timestamps count as new responses.
+- The importer uses the standard library `csv` module and SQLAlchemy, so it runs without
+  pandas or numpy.
 
 ## API
 
@@ -159,6 +256,9 @@ cd backend
 .venv/bin/pytest -q
 ```
 
+The suite covers the API, mastery/recommendation services, and the ASSISTments ETL
+(valid rows, invalid rows, duplicates, idempotency, skill limits, and missing columns).
+
 Frontend build:
 
 ```bash
@@ -169,7 +269,12 @@ npm run build
 ## Design notes and limitations
 
 - **Mastery:** a single step of Bayesian Knowledge Tracing is blended by attempt score,
-  rather than fitting a full pyBKT model. The service boundary allows replacing it later.
+  rather than fitting a full pyBKT model. BKT parameters are global hand-set defaults,
+  not fitted per topic. The service boundary allows replacing them later.
+- **Dataset:** the ASSISTments importer stores real historical responses and drives
+  mastery from them, but there is no held-out evaluation comparing BKT against a
+  baseline yet. Attempts are aggregated per student, topic, and day for the dashboard;
+  the underlying `problem_responses` rows are retained for future per-response models.
 - **Recommendations:** weights start hand-set; `recommendation_logs` and `model_runs`
   tables exist for learning weights from outcomes.
 - **LLM safety:** keys live only in the backend environment. Generated flashcards are

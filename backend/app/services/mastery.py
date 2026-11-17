@@ -62,10 +62,13 @@ def apply_quiz_attempt(
     correct_answers: int,
     total_questions: int,
     attempted_at: datetime | None = None,
+    snapshot_at: datetime | None = None,
 ) -> tuple[QuizAttempt, float]:
     """Store an attempt and add a mastery snapshot.
 
-    The caller is responsible for committing the transaction.
+    The caller is responsible for committing the transaction. `snapshot_at`
+    lets ETL imports timestamp historical snapshots at the original attempt
+    time so mastery history keeps its chronological order.
     """
     score = correct_answers / total_questions
     attempt = QuizAttempt(
@@ -95,6 +98,7 @@ def apply_quiz_attempt(
             topic_id=topic_id,
             mastery=new_mastery,
             source="quiz",
+            created_at=snapshot_at or datetime.now(timezone.utc),
         )
     )
     db.flush()

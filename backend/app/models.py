@@ -1,6 +1,17 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -101,3 +112,44 @@ class Flashcard(Base):
     # llm | fallback | manual | seed
     source: Mapped[str] = mapped_column(String(20), default="manual")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ProblemResponse(Base):
+    """One validated problem response from an external dataset.
+
+    Raw responses are kept for auditability and for rebuilding mastery or
+    evaluating models. `quiz_attempt_id` links a response to the aggregated
+    attempt created by the ETL attempt builder.
+    """
+
+    __tablename__ = "problem_responses"
+    __table_args__ = (
+        UniqueConstraint(
+            "source", "source_row_hash", name="uq_problem_responses_source_hash"
+        ),
+        Index(
+            "ix_problem_responses_student_topic_time",
+            "student_id",
+            "topic_id",
+            "responded_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    student_id: Mapped[int] = mapped_column(ForeignKey("students.id"), index=True)
+    topic_id: Mapped[int] = mapped_column(ForeignKey("topics.id"), index=True)
+    quiz_attempt_id: Mapped[int | None] = mapped_column(
+        ForeignKey("quiz_attempts.id"), nullable=True, index=True
+    )
+    source: Mapped[str] = mapped_column(String(80), index=True)
+    source_row_hash: Mapped[str] = mapped_column(String(64))
+    external_user_id: Mapped[str] = mapped_column(String(80))
+    external_skill_id: Mapped[str | None] = mapped_column(String(80))
+    skill_name: Mapped[str | None] = mapped_column(String(160))
+    assignment_id: Mapped[str | None] = mapped_column(String(80))
+    correct: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    hint_count: Mapped[int | None] = mapped_column(Integer)
+    attempt_count: Mapped[int | None] = mapped_column(Integer)
+    response_ms: Mapped[int | None] = mapped_column(Integer)
+    responded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

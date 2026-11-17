@@ -17,6 +17,10 @@ venv/
 *.sqlite
 *.sqlite3
 
+# Real datasets stay local; only the tiny sample fixture is committed
+backend/data/*
+!backend/data/sample_assistments.csv
+
 # Node / frontend
 node_modules/
 dist/
