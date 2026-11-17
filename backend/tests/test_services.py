@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from app.models import Student, Topic
-from app.services.llm import _parse_flashcards
+from app.services.llm import _parse_flashcards, _parse_quiz
 from app.services.mastery import apply_quiz_attempt, bkt_update
 from app.services.recommendations import compute_recommendations
 
@@ -69,3 +69,47 @@ def test_flashcard_json_parsing_validates_and_limits():
 
     assert _parse_flashcards("not json at all", count=5) == []
     assert _parse_flashcards("[]", count=5) == []
+
+
+def test_quiz_json_parsing_validates_questions():
+    topic_names = {1: "Fractions", 2: "Patterns"}
+    fenced = """```json
+    [
+      {"topic_id": 1, "question": "Q1", "options": ["a", "b", "c", "d"], "correct_index": 2, "explanation": "E1"},
+      {"topic_id": 99, "question": "unknown topic", "options": ["a", "b", "c", "d"], "correct_index": 0, "explanation": "E"},
+      {"topic_id": 1, "question": "three options", "options": ["a", "b", "c"], "correct_index": 0, "explanation": "E"},
+      {"topic_id": 1, "question": "duplicate options", "options": ["a", "a", "c", "d"], "correct_index": 0, "explanation": "E"},
+      {"topic_id": 1, "question": "bad index", "options": ["a", "b", "c", "d"], "correct_index": 4, "explanation": "E"},
+      {"topic_id": 2, "question": "Q2", "options": ["w", "x", "y", "z"], "correct_index": 1, "explanation": "E2"}
+    ]
+    ```"""
+    questions = _parse_quiz(fenced, topic_names, count=5)
+    assert [item["question"] for item in questions] == ["Q1", "Q2"]
+    assert questions[0]["topic_name"] == "Fractions"
+    assert questions[0]["correct_index"] == 2
+    assert questions[1]["correct_index"] == 1
+
+    # Duplicate question text is discarded case-insensitively.
+    duplicate = (
+        '[{"topic_id": 1, "question": "Q1", "options": ["a", "b", "c", "d"], '
+        '"correct_index": 0, "explanation": "E"}, '
+        '{"topic_id": 1, "question": "q1", "options": ["a", "b", "c", "d"], '
+        '"correct_index": 0, "explanation": "E"}]'
+    )
+    assert len(_parse_quiz(duplicate, topic_names, count=5)) == 1
+
+    wrapped = (
+        '{"questions": [{"topic_id": 2, "question": "Q", "options": '
+        '["a", "b", "c", "d"], "correct_index": 0, "explanation": "E"}]}'
+    )
+    assert len(_parse_quiz(wrapped, topic_names, count=5)) == 1
+
+    # A short lead-in before the payload is tolerated; trailing prose is ignored.
+    prose = (
+        'Here is the quiz:\n[{"topic_id": 1, "question": "Q", "options": '
+        '["a", "b", "c", "d"], "correct_index": 0, "explanation": "E"}]\nGood luck!'
+    )
+    assert len(_parse_quiz(prose, topic_names, count=5)) == 1
+
+    assert _parse_quiz("not json", topic_names, count=5) == []
+    assert _parse_quiz("[]", topic_names, count=5) == []

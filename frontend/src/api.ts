@@ -1,6 +1,7 @@
 import type {
   Flashcard,
   FlashcardBatch,
+  GeneratedQuiz,
   MasteryHistoryPoint,
   Progress,
   QuizResult,
@@ -111,6 +112,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ topic_id: topicId, count }),
     }),
+  generateQuiz: (studentId: number, count: number, subject?: string | null) =>
+    request<GeneratedQuiz>(
+      withParams(`/students/${studentId}/quiz/generate`, { subject }),
+      {
+        method: "POST",
+        body: JSON.stringify({ count }),
+      },
+    ),
   deleteFlashcard: (flashcardId: number) =>
     request<void>(`/flashcards/${flashcardId}`, { method: "DELETE" }),
 };

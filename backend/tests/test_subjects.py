@@ -7,7 +7,12 @@ from app.models import ProblemResponse, Student, Topic
 from app.services.mastery import apply_quiz_attempt
 from app.services.progress import topic_mastery_rows
 from app.services.recommendations import compute_recommendations
-from app.subjects import backfill_topic_subjects, ensure_subject, resolve_subject
+from app.subjects import (
+    SUBJECT_REGISTRY,
+    backfill_topic_sources,
+    ensure_subject,
+    resolve_subject,
+)
 
 
 def test_subjects_are_created_by_content_not_upfront(db):
@@ -21,21 +26,25 @@ def test_subjects_are_created_by_content_not_upfront(db):
     assert ensure_subject(db, "computer-science").id == cs.id
     assert resolve_subject(db, "Computer Science").key == "computer-science"
 
-    maths = ensure_subject(db, "mathematics")
-    assert resolve_subject(db, "MATHEMATICS").key == "mathematics"
-    assert resolve_subject(db, maths.id).key == "mathematics"
+    trading = ensure_subject(db, "trading")
+    assert resolve_subject(db, "TRADING").key == "trading"
+    assert resolve_subject(db, trading.id).key == "trading"
+
+    # The ASSISTments importer declares no subject, so no Mathematics entry
+    # exists to attach imported topics to.
+    assert "mathematics" not in SUBJECT_REGISTRY
 
 
-def test_backfill_assigns_imported_topics_to_mathematics(db):
+def test_backfill_labels_imported_source_without_assigning_a_subject(db):
     student = Student(name="Imported", email="imported@example.com")
-    maths_topic = Topic(name="Box and Whisker", difficulty=0.5)
+    imported_topic = Topic(name="Box and Whisker", difficulty=0.5)
     curated_topic = Topic(name="Binary Trees", difficulty=0.5)
-    db.add_all([student, maths_topic, curated_topic])
+    db.add_all([student, imported_topic, curated_topic])
     db.flush()
     db.add(
         ProblemResponse(
             student_id=student.id,
-            topic_id=maths_topic.id,
+            topic_id=imported_topic.id,
             source="assistments-2009-10",
             source_row_hash="hash-1",
             external_user_id="1001",
@@ -45,17 +54,15 @@ def test_backfill_assigns_imported_topics_to_mathematics(db):
     )
     db.flush()
 
-    updated = backfill_topic_subjects(db)
-    assert updated == 2
+    updated = backfill_topic_sources(db)
+    assert updated == 1
 
-    db.refresh(maths_topic)
+    db.refresh(imported_topic)
     db.refresh(curated_topic)
-    maths = resolve_subject(db, "mathematics")
-    cs = resolve_subject(db, "computer-science")
-    assert maths_topic.subject_id == maths.id
-    assert maths_topic.source == "assistments-2009-10"
-    assert curated_topic.subject_id == cs.id
-    assert curated_topic.source == "legacy"
+    assert imported_topic.source == "assistments-2009-10"
+    assert imported_topic.subject_id is None
+    assert curated_topic.source == "curated"
+    assert curated_topic.subject_id is None
 
 
 def test_mastery_and_recommendations_can_be_scoped_to_a_subject(db):

@@ -179,3 +179,31 @@ class FlashcardOut(BaseModel):
 class FlashcardBatchOut(BaseModel):
     flashcards: list[FlashcardOut]
     source: Literal["llm", "fallback"]
+
+
+class QuizFocusOut(BaseModel):
+    topic_id: int
+    topic_name: str
+    mastery: float
+    role: Literal["weak", "strength"]
+    reason: str
+
+
+class GeneratedQuizQuestionOut(BaseModel):
+    topic_id: int
+    topic_name: str
+    question: str
+    options: list[str]
+    correct_index: int
+    explanation: str
+
+
+class QuizGenerateRequest(BaseModel):
+    count: int = Field(default=5, ge=1, le=10)
+
+
+class QuizGenerateOut(BaseModel):
+    questions: list[GeneratedQuizQuestionOut]
+    focus: list[QuizFocusOut]
+    source: Literal["llm"]
+    generated_at: datetime

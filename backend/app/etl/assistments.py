@@ -48,7 +48,6 @@ from sqlalchemy.orm import Session
 from ..database import Base, SessionLocal, engine
 from ..models import ProblemResponse, Student, Topic
 from ..services.mastery import apply_quiz_attempt, clamp
-from ..subjects import ensure_subject
 
 logger = logging.getLogger("edumind.etl")
 
@@ -495,11 +494,9 @@ def import_assistments(
     batch: list[dict[str, Any]] = []
     clock = _SyntheticClock()
 
-    # Imported skills belong to the Mathematics subject. The subject is created
-    # on demand so the ETL also works against a database that has never been
-    # started by the API.
-    maths_subject = ensure_subject(db, "mathematics")
-    db.flush()
+    # The Skill Builder CSV has no subject field. Do not invent one: imported
+    # topics stay unassigned until an importer that declares a subject attaches
+    # them, so the UI never shows a curriculum label the dataset does not have.
 
     text_encoding = encoding or _detect_encoding(path)
     logger.info("Reading %s with encoding %s", path, text_encoding)
@@ -551,7 +548,6 @@ def import_assistments(
                     item["skill_id"],
                     dataset_name,
                     topic_cache,
-                    subject_id=maths_subject.id,
                 )
                 if student_created:
                     summary.students_created += 1

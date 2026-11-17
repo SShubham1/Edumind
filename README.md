@@ -2,8 +2,9 @@
 
 EduMind is a local-first adaptive learning platform. It tracks per-topic mastery from
 study sessions and quiz results, ranks what each student should study next, visualises
-progress, and generates study plans and flashcards with a server-side LLM (with a
-deterministic fallback when no key is configured).
+progress, and generates study plans, flashcards and practice quizzes with a server-side
+LLM. Study plans and flashcards have a deterministic fallback when no key is configured;
+generated quizzes do not, so EduMind never fabricates quiz questions offline.
 
 This is a boilerplate implementation of the CS698B project proposal. Cross-development
 plugin endpoints for the Avengers Centralized Trading Engine are intentionally deferred
@@ -13,7 +14,7 @@ the API, or a plugin.
 
 ## Features
 
-- **Students and topics** created from imported data (ASSISTments Mathematics), the
+- **Students and topics** created from imported data (the ASSISTments CSV), the
   API, or a plugin — never fabricated at startup.
 - **ASSISTments ETL** that imports real historical responses from the 2009-10 Skill
   Builder CSV, stores them in `problem_responses`, and rebuilds attempts and mastery.
@@ -27,6 +28,8 @@ the API, or a plugin.
 - **AI study plans** generated server-side from ranked topics.
 - **Flashcards** generated per topic by the LLM, validated as JSON before saving, with
   deterministic retrieval-practice cards as a fallback.
+- **AI practice quizzes** generated from the student's weakest topics plus one relative
+  strength. Graded answers flow through the normal quiz-result path and update mastery.
 - **OpenAPI docs** at `/docs`.
 
 ## Stack
@@ -50,7 +53,7 @@ Edumind/
 │   │   ├── schemas.py           # request/response models
 │   │   ├── subjects.py          # subject registry and provenance helpers
 │   │   ├── main.py              # FastAPI app and lifespan
-│   │   ├── routers/             # health, subjects, topics, students, records, flashcards
+│   │   ├── routers/             # health, subjects, topics, students, records, quizzes, flashcards
 │   │   ├── etl/                 # ASSISTments CSV importer and CLI
 │   │   └── services/            # mastery, progress, recommendations, llm
 │   ├── data/
@@ -61,7 +64,7 @@ Edumind/
 │   ├── src/
 │   │   ├── App.tsx              # dashboard composition
 │   │   ├── api.ts               # typed API client
-│   │   ├── components/          # charts, recommendations, forms, flashcards
+│   │   ├── components/          # charts, recommendations, forms, flashcards, quiz
 │   │   └── styles.css
 │   └── package.json
 └── README.md
@@ -85,7 +88,7 @@ uvicorn app.main:app --reload --port 8000
 - API: <http://localhost:8000>
 - Swagger UI: <http://localhost:8000/docs>
 - On first start the app creates an empty `edumind.db`. Run the ASSISTments import
-  (below) to load Mathematics students, topics and history.
+  (below) to load imported students, topics and history.
 
 ### 2. Frontend
 
@@ -100,10 +103,11 @@ Open <http://localhost:5173>. Vite proxies `/api` to `http://localhost:8000`.
 ### Data
 
 There is no demo dataset. The only bundled history comes from the ASSISTments ETL:
-4,163 anonymised students, 122 Mathematics topics and 338,001 stored responses, which
-the importer rolls up into 89,479 quiz attempts. Other subjects appear only when an
-importer, API client or plugin declares topics for them; the UI then shows a subject
-tab automatically.
+4,163 anonymised students, 122 topics and 338,001 stored responses, which
+the importer rolls up into 89,479 quiz attempts. The CSV has no subject column, so
+imported topics keep `subject_id = NULL` and no subject tab is created for them. Other
+subjects appear only when an importer, API client or plugin declares topics for them;
+the UI then shows a subject tab automatically.
 
 ## ASSISTments dataset (ETL)
 
@@ -120,11 +124,12 @@ file in `backend/data/` — for example `backend/data/skill_builder_data.csv`. R
 dataset files are gitignored; only `backend/data/sample_assistments.csv` is committed.
 
 The original release contains roughly 525k response rows, 4.2k students, 3.5k
-assignments and 111 skill labels. About 79k rows have an empty `skill_name` (they belong
-to non-skill-builder problem sets) and are skipped as invalid. The file has **no
-timestamp column**; `order_id` is chronological and is used to build a synthetic
-timeline. It also contains a few non-UTF-8 bytes, so the importer auto-detects UTF-8
-and falls back to Latin-1.
+assignments and 111 named skills. Some rows have an empty `skill_name`; when a
+`skill_id` is present they are imported under the placeholder `Skill <id>` (12 such
+topics in the full file), and rows with neither field are skipped as invalid. The file
+has **no timestamp column**; `order_id` is chronological and is used to build a
+synthetic timeline. It also contains a few non-UTF-8 bytes, so the importer
+auto-detects UTF-8 and falls back to Latin-1.
 
 ### Run the import
 
@@ -198,16 +203,18 @@ imported students get `/mastery`, `/mastery-history`, `/progress`, and
 
 ### Notes
 
-- The importer adds Mathematics content only. No other subject exists until another
-  importer or plugin declares its topics, so the subject tabs never show empty or
-  fabricated domains.
+- The ASSISTments CSV has no subject column, so the importer records provenance in
+  `topics.source` but leaves `topics.subject_id` empty. No subject exists until another
+  importer, API client or plugin declares its topics, so the subject tabs never show
+  empty or invented domains.
 - **Synthetic dates:** because the official file has no timestamps, imported history is
   placed on a deterministic 2010 timeline. Each new assignment advances one day, and
   responses inside an assignment advance by their recorded response time. The dates are
   internally consistent and reproducible, but they are not real calendar dates.
-- A full import creates ~4.2k students and 111 topics, all returned by
-  `GET /api/students` and `/api/topics`. Use `--max-rows` / `--max-skills` for a
-  dashboard-sized demo until the student picker is paginated or searchable.
+- A full import creates ~4.2k students and ~122 topics (111 named skills plus unnamed
+  skill IDs), all returned by `GET /api/students` and `/api/topics`. Use `--max-rows` /
+  `--max-skills` for a dashboard-sized demo until the student picker is paginated or
+  searchable.
 - Re-running with different flags (for example a different `--dataset-name`) creates a
   separate set of response rows, because the dataset label is part of the identity.
 - The import is idempotent for the same file and label, but it is not a
@@ -236,6 +243,7 @@ Base path: `/api`.
 | GET | `/api/students/{id}/study-records` | Recent study sessions |
 | POST | `/api/quiz-results` | Submit a quiz result and update mastery |
 | GET | `/api/students/{id}/quiz-results` | Recent quiz attempts |
+| POST | `/api/students/{id}/quiz/generate` | Generate an LLM quiz from weak topics + one strength (`?subject=`) |
 | GET | `/api/students/{id}/flashcards?topic_id=` | List a student's flashcards |
 | POST | `/api/flashcards` | Create a flashcard manually |
 | DELETE | `/api/flashcards/{id}` | Delete a flashcard |
@@ -252,6 +260,24 @@ curl -X POST http://localhost:8000/api/students/1/flashcards/generate \
 The response includes `source: "llm" | "fallback"`, so callers can see whether the
 language model or the deterministic generator produced the cards.
 
+Example quiz generation:
+
+```bash
+curl -X POST http://localhost:8000/api/students/1/quiz/generate \
+  -H "Content-Type: application/json" \
+  -d '{"count": 5}'
+```
+
+The response contains `questions` (each with a `topic_id`, four `options`,
+`correct_index` and an `explanation`), a `focus` list marking each topic as `weak` or
+`strength`, and `source: "llm"`. Questions are not persisted. To record the outcome,
+submit the graded answers through `POST /api/quiz-results`; the dashboard does this
+automatically per topic, so generated practice updates mastery exactly like a manually
+logged quiz.
+
+Quiz generation has **no offline fallback**. Without a working `LLM_API_KEY` the
+endpoint returns `503` rather than inventing questions, and the UI shows that message.
+
 ## Configuration
 
 Copy `backend/.env.example` to `backend/.env` and adjust as needed.
@@ -266,8 +292,21 @@ Copy `backend/.env.example` to `backend/.env` and adjust as needed.
 | `LLM_API_KEY` | unset | Server-side API key; never expose to the browser |
 | `LLM_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible endpoint |
 | `LLM_MODEL` | `gpt-4o-mini` | Chat-completions model |
+| `LLM_TIMEOUT_SECONDS` | `30` | Timeout for study plans and flashcards |
+| `LLM_QUIZ_TIMEOUT_SECONDS` | `90` | Timeout for quiz generation |
+| `LLM_QUIZ_MAX_TOKENS` | `4000` | Quiz token budget; retried once at `8000` if truncated |
+
+For Cohere, point the client at its OpenAI-compatible API:
+
+```dotenv
+LLM_BASE_URL=https://api.cohere.ai/compatibility/v1
+LLM_MODEL=command-a-plus-05-2026
+LLM_API_KEY=...
+```
 
 Without `LLM_API_KEY`, study plans and flashcards use deterministic fallbacks.
+Quiz generation instead returns `503`, because there is no safe offline substitute for
+freshly written questions. Keys are read only by the backend; `.env` is gitignored.
 
 ## Tests
 
@@ -276,8 +315,10 @@ cd backend
 .venv/bin/pytest -q
 ```
 
-The suite covers the API, mastery/recommendation services, and the ASSISTments ETL
-(valid rows, invalid rows, duplicates, idempotency, skill limits, and missing columns).
+The suite covers the API, mastery/recommendation services, the LLM output parsers, and
+the ASSISTments ETL (valid rows, invalid rows, duplicates, idempotency, skill limits,
+and missing columns). Tests run with the LLM key disabled and patch the provider
+explicitly where needed, so they never make network requests or depend on a local key.
 
 Frontend build:
 
@@ -299,6 +340,11 @@ npm run build
   tables exist for learning weights from outcomes.
 - **LLM safety:** keys live only in the backend environment. Generated flashcards are
   parsed and validated before being persisted; malformed output falls back safely.
+  Generated quiz questions are validated too (known topic, four distinct options, valid
+  answer index) and are never saved automatically. Quiz calls use a dedicated timeout
+  and token budget because reasoning-capable models may think before emitting JSON;
+  truncated output is retried once with a larger budget, then rejected rather than
+  partially shown.
 - **Auth:** not implemented yet. Add authentication before any real deployment.
 - **Database:** SQLite is used locally; models avoid SQLite-specific types so PostgreSQL
   can be enabled through `DATABASE_URL` (install `psycopg` when needed).

@@ -4,6 +4,7 @@ import { EntryForms } from "./components/EntryForms";
 import { Flashcards } from "./components/Flashcards";
 import { MasteryChart } from "./components/MasteryChart";
 import { MasteryTrend } from "./components/MasteryTrend";
+import { QuizGenerator } from "./components/QuizGenerator";
 import { Recommendations } from "./components/Recommendations";
 import { StudentPicker } from "./components/StudentPicker";
 import { StudyPlan } from "./components/StudyPlan";
@@ -198,8 +199,8 @@ export default function App() {
                   <h2>No topics in {selectedSubject?.name ?? "this subject"}</h2>
                   <p>
                     A subject appears only when an importer, API client or plugin
-                    declares content for it. Import the ASSISTments dataset to add
-                    Mathematics topics.
+                    declares content for it. Import the ASSISTments dataset or
+                    connect a plugin to add topics.
                   </p>
                 </section>
               ) : (
@@ -306,6 +307,24 @@ export default function App() {
                     <Flashcards studentId={selectedStudent.id} topics={topics} />
                   </section>
 
+                  <section className="card" aria-labelledby="quiz-title">
+                    <header className="card-head">
+                      <div>
+                        <h2 id="quiz-title">AI practice quiz</h2>
+                        <p className="hint">
+                          Multiple-choice questions generated from your weakest topics plus
+                          one relative strength. Graded results update mastery.
+                        </p>
+                      </div>
+                    </header>
+                    <QuizGenerator
+                      key={`${selectedStudent.id}-${subjectKey ?? "all"}`}
+                      studentId={selectedStudent.id}
+                      subject={subjectKey}
+                      onGraded={refresh}
+                    />
+                  </section>
+
                   <section aria-labelledby="log-title">
                     <div className="section-head">
                       <h2 id="log-title">Log learning activity</h2>
@@ -335,8 +354,8 @@ export default function App() {
 
       <footer className="footer">
         <p>
-          EduMind · local-first React + FastAPI · Mathematics uses imported ASSISTments
-          history; other subjects appear only when an importer or plugin declares them.
+          EduMind · local-first React + FastAPI · imported ASSISTments history and
+          plugin-declared content appear only when a source provides them.
         </p>
       </footer>
     </div>

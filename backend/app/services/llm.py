@@ -245,3 +245,205 @@ async def generate_flashcards(
         logger.warning("LLM flashcard request failed, using fallback: %s", type(exc).__name__)
 
     return fallback, "fallback"
+
+
+def _quiz_prompt(
+    student_name: str,
+    focus: list[dict],
+    count: int,
+) -> str:
+    weak = [item for item in focus if item["role"] == "weak"]
+    strong = [item for item in focus if item["role"] == "strength"]
+
+    def describe(items: list[dict]) -> str:
+        return "\n".join(
+            f"- topic_id {item['topic_id']}: {item['topic_name']} "
+            f"(mastery {item['mastery']:.0%}; {item['reason']})"
+            for item in items
+        )
+
+    sections = [
+        f"Student: {student_name}",
+        "Weak topics — spend most questions here:",
+        describe(weak) if weak else "- none recorded",
+    ]
+    if strong:
+        sections.extend(
+            [
+                "Relative strength — include at most one confidence question:",
+                describe(strong),
+            ]
+        )
+    sections.append(
+        f"Write {count} multiple-choice questions matched to this profile. "
+        "Use only the listed topic_ids. Keep weak-topic questions foundational "
+        "and the strength question slightly harder. Four distinct options per "
+        "question, exactly one correct, and a short explanation of the reasoning.\n"
+        "Use only well-established facts about the topic. Do not invent citations, "
+        "statistics or source names. Do not mention that the topic is weak in the "
+        "question text.\n"
+        'Return ONLY a JSON array of objects with the keys: "topic_id" (integer), '
+        '"question" (string), "options" (array of four strings), '
+        '"correct_index" (integer 0-3), "explanation" (string). '
+        "Do not use markdown fences or extra commentary."
+    )
+    return "\n\n".join(sections)
+
+
+def _decode_json(text: str):
+    """Decode the first JSON value, tolerating fences and surrounding prose."""
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```[a-zA-Z]*\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
+
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # Some models emit a sentence or two before the payload. Decode the first
+    # complete JSON value and ignore the rest instead of rejecting everything.
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(stripped):
+        if char not in "[{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(stripped[index:])
+            return value
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def _parse_quiz(
+    content: str,
+    topic_names: dict[int, str],
+    count: int,
+) -> list[dict]:
+    """Validate model output and keep only well-formed questions.
+
+    Unknown topics, duplicate or missing options, out-of-range answers and
+    duplicate question text are discarded rather than shown to the student.
+    Truncated output simply yields no questions, so the caller can retry.
+    """
+    data = _decode_json(content)
+    if data is None:
+        return []
+
+    if isinstance(data, dict):
+        data = data.get("questions", [])
+    if not isinstance(data, list):
+        return []
+
+    questions: list[dict] = []
+    seen_questions: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            topic_id = int(item.get("topic_id"))
+            correct_index = int(item.get("correct_index"))
+        except (TypeError, ValueError):
+            continue
+        if topic_id not in topic_names or not 0 <= correct_index <= 3:
+            continue
+
+        question = str(item.get("question", "")).strip()
+        explanation = str(item.get("explanation", "")).strip()
+        raw_options = item.get("options")
+        if not question or not explanation or not isinstance(raw_options, list):
+            continue
+        if len(raw_options) != 4:
+            continue
+        options = [str(option).strip() for option in raw_options]
+        if any(not option for option in options):
+            continue
+        if len({option.casefold() for option in options}) != 4:
+            continue
+        question_key = question.casefold()
+        if question_key in seen_questions:
+            continue
+        seen_questions.add(question_key)
+
+        questions.append(
+            {
+                "topic_id": topic_id,
+                "topic_name": topic_names[topic_id],
+                "question": question[:2000],
+                "options": [option[:500] for option in options],
+                "correct_index": correct_index,
+                "explanation": explanation[:2000],
+            }
+        )
+        if len(questions) >= count:
+            break
+    return questions
+
+
+async def generate_quiz(
+    student_name: str,
+    focus: list[dict],
+    count: int = 5,
+) -> tuple[list[dict], str]:
+    """Generate a quiz from the student's weak topics and relative strength.
+
+    Returns ``(questions, "llm")`` on success. If no key is configured or the
+    model returns unusable content, returns ``([], "unavailable")`` — EduMind
+    does not fabricate quiz questions offline.
+    """
+    if not settings.llm_api_key:
+        return [], "unavailable"
+
+    topic_names = {item["topic_id"]: item["topic_name"] for item in focus}
+    payload = {
+        "model": settings.llm_model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You write short formative quizzes for a study app. "
+                    "Output only the JSON array: no reasoning, commentary or "
+                    "markdown fences."
+                ),
+            },
+            {"role": "user", "content": _quiz_prompt(student_name, focus, count)},
+        ],
+        "temperature": 0.4,
+    }
+    headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
+
+    # Reasoning-capable models sometimes spend the whole budget thinking. If
+    # the first response is truncated, retry once with a larger budget.
+    budgets = [settings.llm_quiz_max_tokens]
+    if settings.llm_quiz_max_tokens < 8000:
+        budgets.append(8000)
+
+    for attempt, max_tokens in enumerate(budgets, start=1):
+        try:
+            async with httpx.AsyncClient(timeout=settings.llm_quiz_timeout_seconds) as client:
+                response = await client.post(
+                    f"{settings.llm_base_url.rstrip('/')}/chat/completions",
+                    json={**payload, "max_tokens": max_tokens},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                choice = response.json()["choices"][0]
+                content = choice["message"]["content"]
+
+            questions = _parse_quiz(content, topic_names, count)
+            if questions:
+                return questions, "llm"
+
+            if choice.get("finish_reason") != "length" or attempt == len(budgets):
+                break
+            logger.warning(
+                "LLM quiz output was truncated at %s tokens; retrying", max_tokens
+            )
+        except Exception as exc:  # noqa: BLE001 - the caller reports unavailable
+            # Never log request headers or the API key.
+            logger.warning("LLM quiz request failed: %s", type(exc).__name__)
+            break
+
+    logger.warning("LLM quiz response was not usable JSON")
+    return [], "unavailable"

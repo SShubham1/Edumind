@@ -174,20 +174,20 @@ def test_assistments_etl_keeps_multi_skill_rows_sharing_an_order_id(db, tmp_path
     assert db.scalar(select(func.count(ProblemResponse.id))) == 2
 
 
-def test_assistments_etl_assigns_mathematics_subject_and_source(db):
+def test_assistments_etl_labels_source_without_inventing_a_subject(db):
     import_assistments(db, SAMPLE_CSV, build_attempts=False)
 
     from app.models import Subject
 
-    maths = db.scalar(select(Subject).where(Subject.key == "mathematics"))
-    assert maths is not None
+    # The CSV has no subject column; the importer must not create one.
+    assert db.scalar(select(func.count(Subject.id))) == 0
 
     topics = db.scalars(select(Topic)).all()
     assert topics
-    assert all(topic.subject_id == maths.id for topic in topics)
+    assert all(topic.subject_id is None for topic in topics)
     assert all(topic.source == "assistments-2009-10" for topic in topics)
 
-    # Re-importing must not create a second subject or duplicate topics.
+    # Re-importing must not duplicate topics or create a subject.
     import_assistments(db, SAMPLE_CSV, build_attempts=False)
-    assert db.scalar(select(func.count(Subject.id))) == 1
+    assert db.scalar(select(func.count(Subject.id))) == 0
     assert db.scalar(select(func.count(Topic.id))) == len(topics)

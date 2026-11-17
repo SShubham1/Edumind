@@ -224,3 +224,123 @@ def test_student_list_supports_search_and_limit(client: TestClient):
 
     limited = client.get("/api/students?limit=2").json()
     assert len(limited) == 2
+
+
+def _seed_attempt(
+    client: TestClient, student_id: int, topic_id: int, correct: int, total: int = 10
+) -> None:
+    response = client.post(
+        "/api/quiz-results",
+        json={
+            "student_id": student_id,
+            "topic_id": topic_id,
+            "correct_answers": correct,
+            "total_questions": total,
+        },
+    )
+    assert response.status_code == 201
+
+
+def test_generated_quiz_targets_weak_topics_plus_one_strength(
+    client: TestClient, monkeypatch
+):
+    import app.routers.quizzes as quizzes
+
+    student = client.post(
+        "/api/students",
+        json={"name": "Quiz Student", "email": "quiz@example.com"},
+    ).json()
+    weak = client.post(
+        "/api/topics", json={"name": "Fractions", "difficulty": 0.6}
+    ).json()
+    strong = client.post(
+        "/api/topics", json={"name": "Patterns", "difficulty": 0.3}
+    ).json()
+    _seed_attempt(client, student["id"], weak["id"], correct=1)
+    _seed_attempt(client, student["id"], strong["id"], correct=9)
+
+    captured: dict = {}
+
+    async def fake_generate(student_name, focus, count=5):
+        captured["student_name"] = student_name
+        captured["focus"] = focus
+        captured["count"] = count
+        question = {
+            "topic_id": focus[0]["topic_id"],
+            "topic_name": focus[0]["topic_name"],
+            "question": "What is 1/2 + 1/4?",
+            "options": ["3/4", "2/6", "1/8", "1/6"],
+            "correct_index": 0,
+            "explanation": "Use a common denominator of four.",
+        }
+        return [question], "llm"
+
+    monkeypatch.setattr(quizzes, "generate_quiz", fake_generate)
+
+    generated = client.post(
+        f"/api/students/{student['id']}/quiz/generate",
+        json={"count": 3},
+    )
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["source"] == "llm"
+    assert body["questions"][0]["topic_name"] == "Fractions"
+    assert body["focus"][0]["role"] == "weak"
+    assert any(item["role"] == "strength" for item in body["focus"])
+
+    # The prompt is profile-driven: the weak topic is included and the
+    # strength is a separate, relative signal.
+    roles = {item["role"] for item in captured["focus"]}
+    assert roles == {"weak", "strength"}
+    assert all(item["topic_id"] in {weak["id"], strong["id"]} for item in captured["focus"])
+    assert captured["student_name"] == "Quiz Student"
+
+    # Graded generated questions go through the same mastery path as a manual
+    # quiz, so practice feeds the student model.
+    graded = client.post(
+        "/api/quiz-results",
+        json={
+            "student_id": student["id"],
+            "topic_id": body["questions"][0]["topic_id"],
+            "correct_answers": 1,
+            "total_questions": 1,
+        },
+    )
+    assert graded.status_code == 201
+    assert 0.0 <= graded.json()["mastery"] <= 1.0
+
+
+def test_generated_quiz_requires_an_llm_key(client: TestClient):
+    student = client.post(
+        "/api/students",
+        json={"name": "Offline Student", "email": "offline@example.com"},
+    ).json()
+    topic = client.post(
+        "/api/topics", json={"name": "Decimals", "difficulty": 0.5}
+    ).json()
+    _seed_attempt(client, student["id"], topic["id"], correct=3)
+
+    response = client.post(
+        f"/api/students/{student['id']}/quiz/generate",
+        json={"count": 5},
+    )
+    assert response.status_code == 503
+    assert "LLM" in response.json()["detail"]
+
+    assert (
+        client.post("/api/students/9999/quiz/generate", json={"count": 5}).status_code
+        == 404
+    )
+
+
+def test_generated_quiz_requires_topics(client: TestClient):
+    student = client.post(
+        "/api/students",
+        json={"name": "New Student", "email": "new@example.com"},
+    ).json()
+
+    response = client.post(
+        f"/api/students/{student['id']}/quiz/generate",
+        json={"count": 5},
+    )
+    assert response.status_code == 404

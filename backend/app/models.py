@@ -31,11 +31,11 @@ class Student(Base):
 
 
 class Subject(Base):
-    """A curriculum domain such as Mathematics or Computer Science.
+    """A curriculum domain declared by an importer, API client or plugin.
 
     Topics belong to a subject so that mastery, recommendations and charts can
-    be scoped: a student's maths and cooking topics should not be ranked in the
-    same list.
+    be scoped: a student's programming and cooking topics should not be ranked
+    in the same list.
     """
 
     __tablename__ = "subjects"

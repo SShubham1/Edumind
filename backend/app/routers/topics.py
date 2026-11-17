@@ -29,7 +29,7 @@ def _resolve_or_create(db: Session, subject: str | int) -> Subject:
 def list_topics(
     subject: str | None = Query(
         default=None,
-        description="Filter by subject key, name or id (e.g. `mathematics`).",
+        description="Filter by subject key, name or id (e.g. `trading`).",
     ),
     db: Session = Depends(get_db),
 ):

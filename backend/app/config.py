@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: float = 30.0
+    # Quiz generation is longer than a plan or a card. Give it its own timeout
+    # and token budget so reasoning-capable models have room to finish.
+    llm_quiz_timeout_seconds: float = 90.0
+    llm_quiz_max_tokens: int = 4000
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env"),

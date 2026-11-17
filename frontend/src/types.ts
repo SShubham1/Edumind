@@ -102,3 +102,27 @@ export interface FlashcardBatch {
   flashcards: Flashcard[];
   source: "llm" | "fallback";
 }
+
+export interface QuizFocus {
+  topic_id: number;
+  topic_name: string;
+  mastery: number;
+  role: "weak" | "strength";
+  reason: string;
+}
+
+export interface GeneratedQuizQuestion {
+  topic_id: number;
+  topic_name: string;
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+}
+
+export interface GeneratedQuiz {
+  questions: GeneratedQuizQuestion[];
+  focus: QuizFocus[];
+  source: "llm";
+  generated_at: string;
+}
