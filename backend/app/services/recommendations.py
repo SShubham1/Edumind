@@ -28,14 +28,25 @@ def _reason(
     return f"Recent accuracy {recent_accuracy:.0%} - needs reinforcement"
 
 
-def compute_recommendations(db: Session, student_id: int, limit: int = 5) -> list[dict]:
+def compute_recommendations(
+    db: Session,
+    student_id: int,
+    limit: int = 5,
+    subject_id: int | None = None,
+) -> list[dict]:
     """Rank topics by expected study priority.
 
     R(t) = w1(1 - mastery) + w2*revision_urgency + w3*difficulty + w4*weakness
+
+    ``subject_id`` restricts ranking to one subject; without it, topics from
+    unrelated domains would be compared against each other.
     """
     now = datetime.now(timezone.utc)
     window = max(settings.revision_window_days, 1.0)
-    topics = db.scalars(select(Topic).order_by(Topic.name)).all()
+    query = select(Topic).order_by(Topic.name)
+    if subject_id is not None:
+        query = query.where(Topic.subject_id == subject_id)
+    topics = db.scalars(query).all()
     ranked: list[dict] = []
 
     for topic in topics:
@@ -76,6 +87,7 @@ def compute_recommendations(db: Session, student_id: int, limit: int = 5) -> lis
             {
                 "topic_id": topic.id,
                 "topic_name": topic.name,
+                "subject_id": topic.subject_id,
                 "score": round(score, 4),
                 "mastery": round(mastery, 4),
                 "reason": _reason(mastery, days_since, recent_accuracy, contributions),

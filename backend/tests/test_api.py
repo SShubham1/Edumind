@@ -136,3 +136,91 @@ def test_flashcard_generation_and_management(client: TestClient):
         json={"topic_id": 9999, "count": 3},
     )
     assert missing_topic.status_code == 404
+
+
+def test_subjects_scope_topics_progress_and_recommendations(client: TestClient):
+    student = client.post(
+        "/api/students",
+        json={"name": "Subject Student", "email": "subjects@example.com"},
+    ).json()
+
+    cs = client.post(
+        "/api/topics",
+        json={"name": "Linked Lists", "subject": "computer-science", "difficulty": 0.4},
+    ).json()
+    trading = client.post(
+        "/api/topics",
+        json={"name": "Moving Averages", "subject": "trading", "difficulty": 0.6},
+    ).json()
+    assert cs["subject_id"] != trading["subject_id"]
+    assert cs["source"] == "curated"
+
+    for topic, correct in ((cs, 9), (trading, 2)):
+        response = client.post(
+            "/api/quiz-results",
+            json={
+                "student_id": student["id"],
+                "topic_id": topic["id"],
+                "correct_answers": correct,
+                "total_questions": 10,
+            },
+        )
+        assert response.status_code == 201
+
+    subjects = {item["key"]: item for item in client.get("/api/subjects").json()}
+    assert subjects["computer-science"]["topic_count"] == 1
+    assert subjects["trading"]["topic_count"] == 1
+    # Nothing has declared Mathematics content in this database, so the
+    # subject does not exist yet.
+    assert "mathematics" not in subjects
+
+    scoped = client.get("/api/topics?subject=trading")
+    assert scoped.status_code == 200
+    assert [topic["name"] for topic in scoped.json()] == ["Moving Averages"]
+
+    progress = client.get(
+        f"/api/students/{student['id']}/progress?subject=trading"
+    ).json()
+    assert progress["subject_id"] == trading["subject_id"]
+    assert progress["total_attempts"] == 1
+    assert [row["topic_name"] for row in progress["topics"]] == ["Moving Averages"]
+
+    recommendations = client.get(
+        f"/api/students/{student['id']}/recommendations?subject=trading"
+    ).json()
+    assert [item["topic_id"] for item in recommendations] == [trading["id"]]
+
+    history = client.get(
+        f"/api/students/{student['id']}/mastery-history?subject=trading"
+    ).json()
+    assert all(point["topic_id"] == trading["id"] for point in history)
+
+    assert client.get("/api/topics?subject=nonexistent").status_code == 404
+    assert (
+        client.post(
+            "/api/topics",
+            json={"name": "Unknown Subject Topic", "subject": "nonexistent"},
+        ).status_code
+        == 404
+    )
+
+
+def test_student_list_supports_search_and_limit(client: TestClient):
+    for name, email in (
+        ("Alice Zephyr", "alice@example.com"),
+        ("Alicia Gomez", "alicia@example.com"),
+        ("Bob Stone", "bob@example.com"),
+    ):
+        assert (
+            client.post("/api/students", json={"name": name, "email": email}).status_code
+            == 201
+        )
+
+    searched = client.get("/api/students?q=ali").json()
+    assert {student["name"] for student in searched} == {"Alice Zephyr", "Alicia Gomez"}
+
+    by_email = client.get("/api/students?q=bob@example.com").json()
+    assert [student["name"] for student in by_email] == ["Bob Stone"]
+
+    limited = client.get("/api/students?limit=2").json()
+    assert len(limited) == 2

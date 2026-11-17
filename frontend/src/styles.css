@@ -158,6 +158,111 @@ a {
   min-width: 170px;
 }
 
+/* Student combobox */
+.combobox {
+  position: relative;
+  min-width: 230px;
+}
+
+.combobox input {
+  width: 100%;
+}
+
+.combobox-list {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.14);
+}
+
+.combobox-option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.combobox-option.active {
+  background: var(--brand-soft);
+}
+
+.combobox-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.combobox-email {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.combobox-note {
+  padding: 10px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+/* Subject tabs */
+.subject-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.subject-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.subject-tab:hover {
+  border-color: #c7d2fe;
+  color: var(--brand);
+}
+
+.subject-tab.active {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+}
+
+.subject-count {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-variant-numeric: tabular-nums;
+}
+
+.subject-tab.active .subject-count {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+}
+
 /* Layout */
 main {
   flex: 1;
@@ -870,6 +975,11 @@ textarea:hover {
 
   .student-picker select {
     flex: 1;
+  }
+
+  .combobox {
+    flex: 1;
+    min-width: 0;
   }
 
   .forms-grid {

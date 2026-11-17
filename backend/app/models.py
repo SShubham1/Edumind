@@ -30,10 +30,34 @@ class Student(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Subject(Base):
+    """A curriculum domain such as Mathematics or Computer Science.
+
+    Topics belong to a subject so that mastery, recommendations and charts can
+    be scoped: a student's maths and cooking topics should not be ranked in the
+    same list.
+    """
+
+    __tablename__ = "subjects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(60), unique=True, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Topic(Base):
     __tablename__ = "topics"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # Nullable so rows created before the subject model existed can be
+    # backfilled by ``app.subjects.ensure_subjects``.
+    subject_id: Mapped[int | None] = mapped_column(
+        ForeignKey("subjects.id"), index=True, nullable=True
+    )
+    # Provenance: seed | curated | assistments-2009-10 | plugin:<slug>
+    source: Mapped[str] = mapped_column(String(60), default="curated")
     name: Mapped[str] = mapped_column(String(160), unique=True, index=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     # Difficulty in [0, 1]; higher means harder.

@@ -19,9 +19,10 @@ const DASHES = ["solid", "dot", "dash", "dashdot", "longdash", "longdashdot"];
 interface MasteryTrendProps {
   points: MasteryHistoryPoint[];
   rows: MasteryRow[];
+  maxSeries?: number;
 }
 
-export function MasteryTrend({ points, rows }: MasteryTrendProps) {
+export function MasteryTrend({ points, rows, maxSeries = 8 }: MasteryTrendProps) {
   const [showTable, setShowTable] = useState(false);
 
   const topicNames = useMemo(
@@ -29,7 +30,7 @@ export function MasteryTrend({ points, rows }: MasteryTrendProps) {
     [rows],
   );
 
-  const data = useMemo(() => {
+  const { data, hiddenCount } = useMemo(() => {
     const grouped = new Map<number, MasteryHistoryPoint[]>();
     for (const point of points) {
       const bucket = grouped.get(point.topic_id);
@@ -40,21 +41,31 @@ export function MasteryTrend({ points, rows }: MasteryTrendProps) {
       }
     }
 
-    return [...grouped.entries()].map(([topicId, topicPoints], index) => {
-      const name = topicNames.get(topicId) ?? `Topic ${topicId}`;
-      const color = PALETTE[index % PALETTE.length];
-      return {
-        type: "scatter",
-        mode: "lines+markers",
-        name,
-        x: topicPoints.map((point) => point.created_at),
-        y: topicPoints.map((point) => point.mastery),
-        line: { color, width: 2, dash: DASHES[index % DASHES.length] },
-        marker: { color, size: 7, line: { color: "#ffffff", width: 1 } },
-        hovertemplate: `<b>${name}</b><br>%{x|%d %b %Y}<br>Mastery: %{y:.1%}<extra></extra>`,
-      };
-    });
-  }, [points, topicNames]);
+    // A 100-topic subject would otherwise draw 100 overlapping lines. Show the
+    // topics with the most history; the data table still lists every point.
+    const entries = [...grouped.entries()].sort(
+      (a, b) => b[1].length - a[1].length,
+    );
+    const shown = entries.slice(0, Math.max(maxSeries, 1));
+
+    return {
+      data: shown.map(([topicId, topicPoints], index) => {
+        const name = topicNames.get(topicId) ?? `Topic ${topicId}`;
+        const color = PALETTE[index % PALETTE.length];
+        return {
+          type: "scatter",
+          mode: "lines+markers",
+          name,
+          x: topicPoints.map((point) => point.created_at),
+          y: topicPoints.map((point) => point.mastery),
+          line: { color, width: 2, dash: DASHES[index % DASHES.length] },
+          marker: { color, size: 7, line: { color: "#ffffff", width: 1 } },
+          hovertemplate: `<b>${name}</b><br>%{x|%d %b %Y}<br>Mastery: %{y:.1%}<extra></extra>`,
+        };
+      }),
+      hiddenCount: entries.length - shown.length,
+    };
+  }, [points, topicNames, maxSeries]);
 
   const layout = useMemo(
     () => ({
@@ -99,6 +110,13 @@ export function MasteryTrend({ points, rows }: MasteryTrendProps) {
           data.length === 1 ? "" : "s"
         }.`}
       />
+      {hiddenCount > 0 && (
+        <p className="hint">
+          Showing the {data.length} topics with the most history; {hiddenCount} more
+          {hiddenCount === 1 ? " has" : " have"} snapshots. The data table below lists every
+          point.
+        </p>
+      )}
       <button
         type="button"
         className="link-button"

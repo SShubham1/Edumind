@@ -6,12 +6,15 @@ progress, and generates study plans and flashcards with a server-side LLM (with 
 deterministic fallback when no key is configured).
 
 This is a boilerplate implementation of the CS698B project proposal. Cross-development
-plugin endpoints for HomeSolar are intentionally deferred until the collaboration
-contract is agreed.
+plugin endpoints for the Avengers Centralized Trading Engine are intentionally deferred
+until the collaboration contract is agreed. EduMind never ships or seeds fabricated
+curriculum content: every student, topic and history record comes from a real importer,
+the API, or a plugin.
 
 ## Features
 
-- **Students and topics** with seeded demo data.
+- **Students and topics** created from imported data (ASSISTments Mathematics), the
+  API, or a plugin — never fabricated at startup.
 - **ASSISTments ETL** that imports real historical responses from the 2009-10 Skill
   Builder CSV, stores them in `problem_responses`, and rebuilds attempts and mastery.
 - **Study logging** and **quiz results** that update mastery.
@@ -45,9 +48,9 @@ Edumind/
 │   │   ├── database.py          # engine, session, Base
 │   │   ├── models.py            # students, topics, records, mastery, flashcards, ...
 │   │   ├── schemas.py           # request/response models
-│   │   ├── seed.py              # demo data
+│   │   ├── subjects.py          # subject registry and provenance helpers
 │   │   ├── main.py              # FastAPI app and lifespan
-│   │   ├── routers/             # health, topics, students, records, flashcards
+│   │   ├── routers/             # health, subjects, topics, students, records, flashcards
 │   │   ├── etl/                 # ASSISTments CSV importer and CLI
 │   │   └── services/            # mastery, progress, recommendations, llm
 │   ├── data/
@@ -81,8 +84,8 @@ uvicorn app.main:app --reload --port 8000
 
 - API: <http://localhost:8000>
 - Swagger UI: <http://localhost:8000/docs>
-- On first start, the app creates `edumind.db` and seeds demo data when
-  `SEED_DEMO_DATA=true`.
+- On first start the app creates an empty `edumind.db`. Run the ASSISTments import
+  (below) to load Mathematics students, topics and history.
 
 ### 2. Frontend
 
@@ -94,15 +97,13 @@ npm run dev
 
 Open <http://localhost:5173>. Vite proxies `/api` to `http://localhost:8000`.
 
-### Demo data
+### Data
 
-| Student | Email | Notes |
-|---|---|---|
-| Demo Student | demo@edumind.local | Quiz history, study sessions, sample flashcards |
-| Asha Rao | asha@edumind.local | Quiz history, study session, sample flashcards |
-
-Five topics are seeded: Arrays and Lists, Binary Trees, Graphs, Dynamic Programming,
-Probability.
+There is no demo dataset. The only bundled history comes from the ASSISTments ETL:
+4,163 anonymised students, 122 Mathematics topics and 338,001 stored responses, which
+the importer rolls up into 89,479 quiz attempts. Other subjects appear only when an
+importer, API client or plugin declares topics for them; the UI then shows a subject
+tab automatically.
 
 ## ASSISTments dataset (ETL)
 
@@ -197,9 +198,9 @@ imported students get `/mastery`, `/mastery-history`, `/progress`, and
 
 ### Notes
 
-- Importing into a database that already has demo data simply adds the imported
-  students and topics alongside it. To show **only** imported data, start from an empty
-  database and set `SEED_DEMO_DATA=false`.
+- The importer adds Mathematics content only. No other subject exists until another
+  importer or plugin declares its topics, so the subject tabs never show empty or
+  fabricated domains.
 - **Synthetic dates:** because the official file has no timestamps, imported history is
   placed on a deterministic 2010 timeline. Each new assignment advances one day, and
   responses inside an assignment advance by their recorded response time. The dates are
@@ -222,14 +223,15 @@ Base path: `/api`.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/health` | Health check |
-| GET / POST | `/api/topics` | List or create topics |
-| GET / POST | `/api/students` | List or create students |
+| GET | `/api/subjects` | List subjects with topic counts |
+| GET / POST | `/api/topics` | List or create topics (`?subject=` filters) |
+| GET / POST | `/api/students` | List (`?q=` search, `?limit=`) or create students |
 | GET | `/api/students/{id}` | Student details |
-| GET | `/api/students/{id}/mastery` | Per-topic mastery |
-| GET | `/api/students/{id}/mastery-history` | Mastery snapshots over time |
-| GET | `/api/students/{id}/progress` | Dashboard totals and mastery rows |
-| GET | `/api/students/{id}/recommendations?limit=5` | Ranked topics with reasons |
-| POST | `/api/students/{id}/study-plan` | LLM study plan (fallback supported) |
+| GET | `/api/students/{id}/mastery` | Per-topic mastery (`?subject=`) |
+| GET | `/api/students/{id}/mastery-history` | Mastery snapshots over time (`?subject=`) |
+| GET | `/api/students/{id}/progress` | Dashboard totals and mastery rows (`?subject=`) |
+| GET | `/api/students/{id}/recommendations?limit=5` | Ranked topics with reasons (`?subject=`) |
+| POST | `/api/students/{id}/study-plan` | LLM study plan (fallback supported, `?subject=`) |
 | POST | `/api/study-records` | Log a study session |
 | GET | `/api/students/{id}/study-records` | Recent study sessions |
 | POST | `/api/quiz-results` | Submit a quiz result and update mastery |
@@ -258,7 +260,6 @@ Copy `backend/.env.example` to `backend/.env` and adjust as needed.
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./edumind.db` | SQLAlchemy URL; use `postgresql+psycopg://...` for PostgreSQL |
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` | Comma-separated allowed origins |
-| `SEED_DEMO_DATA` | `true` | Seed demo data on first start |
 | `BKT_PRIOR` / `BKT_LEARN` / `BKT_GUESS` / `BKT_SLIP` | `0.30` / `0.18` / `0.20` / `0.10` | Simplified BKT parameters |
 | `REC_WEIGHT_*` | `0.45` / `0.20` / `0.15` / `0.20` | Recommendation weights |
 | `REVISION_WINDOW_DAYS` | `14` | Days until revision urgency saturates |
@@ -302,5 +303,5 @@ npm run build
 - **Database:** SQLite is used locally; models avoid SQLite-specific types so PostgreSQL
   can be enabled through `DATABASE_URL` (install `psycopg` when needed).
 - **Docker:** intentionally not included at this stage.
-- **Cross-dev plugin:** HomeSolar endpoints and registration hooks are deferred until the
-  collaboration API contract is available.
+- **Cross-dev plugin:** Avengers endpoints and registration hooks are deferred until
+  the collaboration API contract is available.

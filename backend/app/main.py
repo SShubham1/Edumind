@@ -5,9 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .database import Base, SessionLocal, engine
-from .routers import flashcards, health, records, students, topics
-from .seed import seed_demo_data
+from .database import SessionLocal, engine
+from .migrations import ensure_schema
+from .routers import flashcards, health, records, students, subjects, topics
+from .subjects import backfill_topic_subjects
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -15,12 +16,17 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    if settings.seed_demo_data:
-        with SessionLocal() as db:
-            created = seed_demo_data(db)
-            if created:
-                logger.info("Seeded demo students, topics and quiz history.")
+    applied = ensure_schema(engine)
+    if applied:
+        logger.info("Applied schema upgrades: %s", ", ".join(applied))
+    # Legacy topics (imported before subjects existed) should appear in their
+    # subject. Content itself only ever arrives through an importer, the API or
+    # a plugin; the app never fabricates topics or students on startup.
+    with SessionLocal() as db:
+        backfilled = backfill_topic_subjects(db)
+        db.commit()
+        if backfilled:
+            logger.info("Assigned a subject to %s existing topics.", backfilled)
     yield
 
 
@@ -28,8 +34,9 @@ app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description=(
-        "Adaptive learning platform API. Cross-dev plugin endpoints are intentionally "
-        "not implemented yet; they will be added with the HomeSolar collaboration."
+        "Adaptive learning platform API: mastery tracking, explainable "
+        "recommendations, subject-scoped dashboards and LLM-assisted study "
+        "material."
     ),
     lifespan=lifespan,
 )
@@ -43,6 +50,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(subjects.router)
 app.include_router(topics.router)
 app.include_router(students.router)
 app.include_router(records.router)

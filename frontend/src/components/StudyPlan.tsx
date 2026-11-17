@@ -5,9 +5,10 @@ import type { StudyPlan as StudyPlanType } from "../types";
 
 interface StudyPlanProps {
   studentId: number;
+  subject?: string | null;
 }
 
-export function StudyPlan({ studentId }: StudyPlanProps) {
+export function StudyPlan({ studentId, subject }: StudyPlanProps) {
   const [plan, setPlan] = useState<StudyPlanType | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -16,7 +17,7 @@ export function StudyPlan({ studentId }: StudyPlanProps) {
     setLoading(true);
     setError(null);
     try {
-      setPlan(await api.generateStudyPlan(studentId));
+      setPlan(await api.generateStudyPlan(studentId, subject));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not generate a study plan.");
     } finally {

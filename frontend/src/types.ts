@@ -5,8 +5,18 @@ export interface Student {
   created_at: string;
 }
 
+export interface Subject {
+  id: number;
+  key: string;
+  name: string;
+  description: string | null;
+  topic_count: number;
+}
+
 export interface Topic {
   id: number;
+  subject_id: number | null;
+  source: string;
   name: string;
   description: string | null;
   difficulty: number;
@@ -15,6 +25,7 @@ export interface Topic {
 export interface MasteryRow {
   topic_id: number;
   topic_name: string;
+  subject_id: number | null;
   difficulty: number;
   mastery: number;
   attempts: number;
@@ -23,6 +34,7 @@ export interface MasteryRow {
 
 export interface Progress {
   student: Student;
+  subject_id: number | null;
   overall_mastery: number;
   total_study_minutes: number;
   total_attempts: number;
@@ -32,6 +44,7 @@ export interface Progress {
 export interface Recommendation {
   topic_id: number;
   topic_name: string;
+  subject_id: number | null;
   score: number;
   mastery: number;
   reason: string;

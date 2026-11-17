@@ -8,10 +8,25 @@ import type {
   Student,
   StudyPlan,
   StudyRecord,
+  Subject,
   Topic,
 } from "./types";
 
 const BASE_URL = "/api";
+
+function withParams(
+  path: string,
+  params: Record<string, string | number | undefined | null>,
+): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "") {
+      search.set(key, String(value));
+    }
+  }
+  const query = search.toString();
+  return query ? `${path}?${query}` : path;
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE_URL}${path}`, {
@@ -48,15 +63,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listStudents: () => request<Student[]>("/students"),
-  listTopics: () => request<Topic[]>("/topics"),
-  getProgress: (studentId: number) => request<Progress>(`/students/${studentId}/progress`),
-  getRecommendations: (studentId: number, limit = 5) =>
-    request<Recommendation[]>(`/students/${studentId}/recommendations?limit=${limit}`),
-  getMasteryHistory: (studentId: number) =>
-    request<MasteryHistoryPoint[]>(`/students/${studentId}/mastery-history`),
-  generateStudyPlan: (studentId: number) =>
-    request<StudyPlan>(`/students/${studentId}/study-plan`, { method: "POST" }),
+  listSubjects: () => request<Subject[]>("/subjects"),
+  listStudents: (options: { q?: string; limit?: number } = {}) =>
+    request<Student[]>(
+      withParams("/students", { q: options.q, limit: options.limit }),
+    ),
+  listTopics: (subject?: string | null) =>
+    request<Topic[]>(withParams("/topics", { subject })),
+  getProgress: (studentId: number, subject?: string | null) =>
+    request<Progress>(withParams(`/students/${studentId}/progress`, { subject })),
+  getRecommendations: (studentId: number, limit = 5, subject?: string | null) =>
+    request<Recommendation[]>(
+      withParams(`/students/${studentId}/recommendations`, { limit, subject }),
+    ),
+  getMasteryHistory: (studentId: number, subject?: string | null) =>
+    request<MasteryHistoryPoint[]>(
+      withParams(`/students/${studentId}/mastery-history`, { subject, limit: 2000 }),
+    ),
+  generateStudyPlan: (studentId: number, subject?: string | null) =>
+    request<StudyPlan>(withParams(`/students/${studentId}/study-plan`, { subject }), {
+      method: "POST",
+    }),
   addStudyRecord: (payload: {
     student_id: number;
     topic_id: number;

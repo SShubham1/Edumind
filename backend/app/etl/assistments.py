@@ -48,6 +48,7 @@ from sqlalchemy.orm import Session
 from ..database import Base, SessionLocal, engine
 from ..models import ProblemResponse, Student, Topic
 from ..services.mastery import apply_quiz_attempt, clamp
+from ..subjects import ensure_subject
 
 logger = logging.getLogger("edumind.etl")
 
@@ -417,6 +418,7 @@ def _get_or_create_topic(
     skill_id: str,
     dataset: str,
     cache: dict[str, Topic],
+    subject_id: int | None = None,
 ) -> tuple[Topic, bool]:
     raw_name = skill_name or f"Skill {skill_id}"
     name = re.sub(r"\s+", " ", raw_name).strip()[:160]
@@ -435,10 +437,17 @@ def _get_or_create_topic(
             name=name,
             description=f"Imported from {dataset}.",
             difficulty=0.5,
+            subject_id=subject_id,
+            source=dataset,
         )
         db.add(topic)
         db.flush()
         created = True
+    elif topic.subject_id is None and subject_id is not None:
+        # Topic created before subjects existed: adopt the imported dataset.
+        topic.subject_id = subject_id
+        if not topic.source or topic.source == "curated":
+            topic.source = dataset
 
     cache[key] = topic
     return topic, created
@@ -485,6 +494,12 @@ def import_assistments(
     groups: dict[tuple[int, int, date], _AttemptGroup] = {}
     batch: list[dict[str, Any]] = []
     clock = _SyntheticClock()
+
+    # Imported skills belong to the Mathematics subject. The subject is created
+    # on demand so the ETL also works against a database that has never been
+    # started by the API.
+    maths_subject = ensure_subject(db, "mathematics")
+    db.flush()
 
     text_encoding = encoding or _detect_encoding(path)
     logger.info("Reading %s with encoding %s", path, text_encoding)
@@ -536,6 +551,7 @@ def import_assistments(
                     item["skill_id"],
                     dataset_name,
                     topic_cache,
+                    subject_id=maths_subject.id,
                 )
                 if student_created:
                     summary.students_created += 1

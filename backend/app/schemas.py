@@ -18,10 +18,22 @@ class StudentCreate(BaseModel):
     email: str = Field(min_length=3, max_length=255)
 
 
+class SubjectOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    key: str
+    name: str
+    description: str | None = None
+    topic_count: int = 0
+
+
 class TopicOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    subject_id: int | None = None
+    source: str
     name: str
     description: str | None = None
     difficulty: float
@@ -31,6 +43,9 @@ class TopicCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=2000)
     difficulty: float = Field(default=0.5, ge=0.0, le=1.0)
+    # Subject key, name or id. Defaults to Computer Science for compatibility
+    # with the original single-subject API.
+    subject: str | int = "computer-science"
 
 
 class StudyRecordCreate(BaseModel):
@@ -86,6 +101,7 @@ class QuizResultOut(BaseModel):
 class MasteryOut(BaseModel):
     topic_id: int
     topic_name: str
+    subject_id: int | None = None
     difficulty: float
     mastery: float
     attempts: int
@@ -94,6 +110,7 @@ class MasteryOut(BaseModel):
 
 class ProgressOut(BaseModel):
     student: StudentOut
+    subject_id: int | None = None
     overall_mastery: float
     total_study_minutes: int
     total_attempts: int
@@ -112,6 +129,7 @@ class MasteryHistoryPoint(BaseModel):
 class RecommendationOut(BaseModel):
     topic_id: int
     topic_name: str
+    subject_id: int | None = None
     score: float
     mastery: float
     reason: str

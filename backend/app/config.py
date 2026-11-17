@@ -11,9 +11,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./edumind.db"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    # Demo data is convenient for local development. Disable in production.
-    seed_demo_data: bool = True
-
     # Simple Bayesian Knowledge Tracing defaults. A later version can fit these
     # per topic from historical data (see services/mastery.py).
     bkt_prior: float = 0.30
